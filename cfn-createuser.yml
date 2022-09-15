@@ -1,3 +1,6 @@
+#!
+# - EC2 role needs KMS permission to decript password from ssm parameter store
+
 AWSTemplateFormatVersion: 2010-09-09
 Parameters:
   username:
