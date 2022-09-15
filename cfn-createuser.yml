@@ -23,8 +23,8 @@ Parameters:
     Description: the tag key value(s) to look for on instances to run the document e.g. app1, app2, app3.
     Type: CommaDelimitedList
   ssmparameter:
-    description: SSM parameter that stores the password of the user.
-    type: String
+    Description: SSM parameter that stores the password of the user.
+    Type: String
 
 Resources:
   SSMDocument:
