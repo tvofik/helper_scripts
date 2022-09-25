@@ -10,6 +10,8 @@
 # user="exampleuser"
 # ad_group="exampleAdmins@example.local"
 
+REGION=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F: '/region/ {print $2}' | sed 's/[\" ,]//g'}
+
 users=("cafnauto" "pamadmin" "pamrecon")
 
 for user in ${users[@]}; do
@@ -27,7 +29,7 @@ for user in ${users[@]}; do
   else
       echo "$user does not exist"
       echo "Creating $user..."
-      password=$(aws ssm get-parameters --names $user --with-decryption --query "Parameters[].Value" --output text)
+      password=$(aws ssm get-parameters --names $user --with-decryption --query "Parameters[].Value" --region $REGION --output text)
       sudo useradd $user -p $password -G wheel > /dev/null 2>&1
   fi
 
