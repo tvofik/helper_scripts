@@ -7,14 +7,13 @@
 # Then add this command to profile - sudo sudosh
 
 #!/bin/bash
-# user="exampleuser"
-# ad_group="exampleAdmins@example.local"
+USERS="{{usernames}}"
+REGION=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F: '/region/ {print $2}' | sed 's/[\" ,]//g')
+password=$(aws ssm get-parameters --names "{{passwordssmparameter}}" --with-decryption --query "Parameters[].Value" --region $REGION --output text) #!if all users use the same passwword
 
-REGION=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F: '/region/ {print $2}' | sed 's/[\" ,]//g'}
+arrUSERS=( $( echo "$USERS" | sed -e 's/,/\n/g' ) )
 
-users=("cafnauto" "pamadmin" "pamrecon")
-
-for user in ${users[@]}; do
+for user in ${arrUSERS[@]}; do
   # Check if local user exisit
   if id -u "$user" >/dev/null 2>&1; then
       echo "$user exists"
@@ -29,7 +28,7 @@ for user in ${users[@]}; do
   else
       echo "$user does not exist"
       echo "Creating $user..."
-      password=$(aws ssm get-parameters --names $user --with-decryption --query "Parameters[].Value" --region $REGION --output text)
+      # password=$(aws ssm get-parameters --names $user --with-decryption --query "Parameters[].Value" --region $REGION --output text) #!if each user has a seperate password
       sudo useradd $user -p $password -G wheel > /dev/null 2>&1
   fi
 
@@ -42,9 +41,3 @@ for user in ${users[@]}; do
     fi
   fi
 done
-
-
-
-# for user in ${users[@]}; do
-#   echo $user
-# done
