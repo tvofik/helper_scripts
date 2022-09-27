@@ -3,7 +3,7 @@ Parameters:
   usernames:
     Description: Enter the name of users to create
     Type: String
-    Default: 'cafnauto,pamadmin,pamrecon'
+    Default: "cafnauto,pamadmin,pamrecon"
   scheduleValue:
     Description: Enter a value to run the schedule.
     Type: Number
@@ -22,33 +22,25 @@ Parameters:
   tagValues:
     Description: the tag key value(s) to look for on instances to run the document e.g. app1, app2, app3.
     Type: CommaDelimitedList
-  passwordssmparameter:
-    Description: SSM parameter that stores the password of the user.
-    Type: String
-
 Resources:
   SSMDocument:
-    Type: 'AWS::SSM::Document'
+    Type: "AWS::SSM::Document"
     Properties:
       Content:
-        schemaVersion: '2.2'
-        description: Creates a Windows local user
+        schemaVersion: "2.2"
+        description: Creates a local user
         parameters:
           usernames:
-            description: (Required) Username to create.
+            description: (Required) Usernames to create.
             type: String
-            default: ''
-          passwordssmparameter:
-            description: (Required) SSM parameter that stores the password of the user.
-            type: String
-            default: ''
+            default: ""
           executionTimeout:
             description: >-
               (Optional) The time in seconds for a command to complete before it
               is considered to have failed. Default is 3600 (1 hour). Maximum is
               28800 (8 hours).
             type: String
-            default: '3600'
+            default: "3600"
             allowedPattern: >-
               ([1-9][0-9]{0,3})|(1[0-9]{1,4})|(2[0-7][0-9]{1,3})|(28[0-7][0-9]{1,2})|(28800)
         mainSteps:
@@ -56,106 +48,107 @@ Resources:
               StringEquals:
                 - platformType
                 - Linux
-            action: 'aws:runShellScript'
+            action: "aws:runShellScript"
             name: runShellScript
             inputs:
               runCommand:
-              - |
-                  #!/bin/bash
+                - |
+                    #!/bin/bash
 
-                  USERS="{{usernames}}"
-                  REGION=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F: '/region/ {print $2}' | sed 's/[\" ,]//g')
-                  password=$(aws ssm get-parameters --names "{{passwordssmparameter}}" --with-decryption --query "Parameters[].Value" --region $REGION --output text) #!if all users use the same passwword
+                    USERS="{{usernames}}"
+                    REGION=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F: '/region/ {print $2}' | sed 's/[\" ,]//g')
 
-                  arrUSERS=( $( echo "$USERS" | sed -e 's/,/\n/g' ) )
+                    arrUSERS=( $( echo "$USERS" | sed -e 's/,/\n/g' ) )
 
-                  for user in ${arrUSERS[@]}; do
-                    # Check if local user exisit
-                    if id -u "$user" >/dev/null 2>&1; then
-                        echo "$user exists"
-                        # Check if user is part of admin group
-                        if id -nG "$user" | grep -qw wheel; then
-                            echo "$user belongs to the admin group"
-                        else
-                            echo "$user does not belong to the admin group"
-                            echo "Adding $user to the admin group"
-                            sudo usermod $user -aG wheel
-                        fi
-                    else
-                        echo "$user does not exist"
-                        echo "Creating $user..."
-                        # password=$(aws ssm get-parameters --names $user --with-decryption --query "Parameters[].Value" --region $REGION --output text) #!if each user has a seperate password
-                        sudo useradd $user -p $password -G wheel > /dev/null 2>&1
-                    fi
-
-                    if [[ $user == "pamrecon" ]]; then
-                      # check if the /home/$user/.bash_profile exisit
-                      if [[ -e /home/$user/.bash_profile ]]; then
-                        sudo echo "sudo sudosh" >> /home/$user/.bash_profile
+                    for user in ${arrUSERS[@]}; do
+                      # Check if local user exist
+                      if id -u "$user" >/dev/null 2>&1; then
+                          echo "$user exists"
+                          # Check if user is part of admin group
+                          if id -nG "$user" | grep -qw wheel; then
+                              echo "$user belongs to the admin group"
+                          else
+                              echo "$user does not belong to the admin group"
+                              echo "Adding $user to the admin group"
+                              sudo usermod $user -aG wheel
+                          fi
                       else
-                        sudo touch /home/$user/.bash_profile && sudo echo "sudo sudosh" >> /home/$user/.bash_profile
+                          echo "$user does not exist"
+                          echo "Creating $user..."
+                          password=$(aws ssm get-parameters --names $user --with-decryption --query "Parameters[].Value" --region $REGION --output text)
+                          sudo useradd $user -p $password -G wheel > /dev/null 2>&1
                       fi
-                    fi
-                  done
-              timeoutSeconds: '{{ executionTimeout }}'
+
+                      if [[ $user == "pamrecon" ]]; then
+                        # check if the /home/$user/.bash_profile exist
+                        if [[ -f /home/$user/.bash_profile ]]; then
+                          if ! grep -q "sudo sudosh" /home/$user/.bash_profile; then
+                            sudo echo "sudo sudosh" >> /home/$user/.bash_profile
+                          fi
+                        else
+                          sudo touch /home/$user/.bash_profile && sudo echo "sudo sudosh" >> /home/$user/.bash_profile
+                        fi
+                      fi
+                    done
+              timeoutSeconds: "{{ executionTimeout }}"
       DocumentFormat: YAML
       DocumentType: Command
       Name: CreateUserSSM
 
-  ScheduledRule: 
+  ScheduledRule:
     Type: AWS::Events::Rule
-    Properties: 
+    Properties:
       Description: "ScheduledRule"
-      ScheduleExpression: !Sub 'rate(${scheduleValue} ${scheduleUnit})'
+      ScheduleExpression: !Sub "rate(${scheduleValue} ${scheduleUnit})"
       State: "ENABLED"
       Targets:
-        - Arn: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${SSMDocument}'
-          Id: 'TargetSSMDocV1'
+        - Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${SSMDocument}"
+          Id: "TargetSSMDocV1"
           RoleArn: !GetAtt EventBridgeRole.Arn
-          Input: !Sub '{"usernames": ["${usernames}"],"passwordssmparameter": ["${passwordssmparameter}"]}'
+          Input: !Sub '{"usernames": ["${usernames}"]}'
           RunCommandParameters:
             RunCommandTargets:
-              - Key: !Sub 'tag:${tagKey}'
+              - Key: !Sub "tag:${tagKey}"
                 Values: !Ref tagValues
 
-  EventRule: 
+  EventRule:
     Type: AWS::Events::Rule
-    Properties: 
+    Properties:
       Description: "Event Rule"
       EventPattern: '{"source": ["aws.ec2"],"detail-type": ["AWS API Call via CloudTrail"],"detail": {"eventSource": ["ec2.amazonaws.com"],"eventName": ["RunInstances"]}}'
       State: "ENABLED"
       Targets:
-        - Arn: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${SSMDocument}'
-          Id: 'TargetSSMDocV1'
+        - Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${SSMDocument}"
+          Id: "TargetSSMDocV1"
           RoleArn: !GetAtt EventBridgeRole.Arn
-          Input: !Sub '{"usernames": ["${usernames}"],"passwordssmparameter": ["${passwordssmparameter}"]}'
+          Input: !Sub '{"usernames": ["${usernames}"]}'
           RunCommandParameters:
             RunCommandTargets:
-              - Key: !Sub 'tag:${tagKey}'
+              - Key: !Sub "tag:${tagKey}"
                 Values: !Ref tagValues
 
   EventBridgeRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
-          - Sid: ''
+          - Sid: ""
             Effect: Allow
             Principal:
               Service:
                 - events.amazonaws.com
-            Action: 'sts:AssumeRole'
-      Description: 'Role used by AWS EventBridge to run SSM Document.'
+            Action: "sts:AssumeRole"
+      Description: "Role used by AWS EventBridge to run SSM Document."
 
   EventBridgeRoleManagedPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       PolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
           - Action:
-              - 'ssm:StartAutomationExecution'
+              - "ssm:StartAutomationExecution"
             Resource:
               - "arn:*:ssm:*:*:automation-definition/AWS-RunShellScript*"
             Effect: Allow
@@ -165,7 +158,7 @@ Resources:
               - "arn:*:ssm:*:*:role/*"
             Effect: Allow
           - Action:
-              - 'ssm:*'
+              - "ssm:*"
             Resource:
               - "arn:*:ssm:*:*:*"
             Effect: Allow
