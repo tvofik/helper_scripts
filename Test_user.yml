@@ -1,0 +1,172 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  usernames:
+    Description: Enter the name of users to create
+    Type: String
+    Default: "cafnauto,pamadmin,pamrecon"
+  scheduleValue:
+    Description: Enter a value to run the schedule.
+    Type: Number
+    Default: 12
+  scheduleUnit:
+    Description: Enter a the unit of time to run the schedule.
+    Type: String
+    Default: hours
+    AllowedValues:
+      - minutes
+      - hours
+      - days
+  tagKey:
+    Description: the tag key to look for on instances to run the document
+    Type: String
+  tagValues:
+    Description: the tag key value(s) to look for on instances to run the document e.g. app1, app2, app3.
+    Type: CommaDelimitedList
+Resources:
+  SSMDocument:
+    Type: "AWS::SSM::Document"
+    Properties:
+      Content:
+        schemaVersion: "2.2"
+        description: Creates a local user
+        parameters:
+          usernames:
+            description: (Required) Usernames to create.
+            type: String
+            default: ""
+          executionTimeout:
+            description: >-
+              (Optional) The time in seconds for a command to complete before it
+              is considered to have failed. Default is 3600 (1 hour). Maximum is
+              28800 (8 hours).
+            type: String
+            default: "3600"
+            allowedPattern: >-
+              ([1-9][0-9]{0,3})|(1[0-9]{1,4})|(2[0-7][0-9]{1,3})|(28[0-7][0-9]{1,2})|(28800)
+        mainSteps:
+          - precondition:
+              StringEquals:
+                - platformType
+                - Linux
+            action: "aws:runShellScript"
+            name: runShellScript
+            inputs:
+              runCommand:
+                - |
+                  #!/bin/bash
+​
+                  USERS="{{usernames}}"
+                  REGION=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F: '/region/ {print $2}' | sed 's/[\" ,]//g')
+​
+                  arrUSERS=( $( echo "$USERS" | sed -e 's/,/\n/g' ) )
+​
+                  for user in ${arrUSERS[@]}; do
+                    # Check if local user exist
+                    if id -u "$user" >/dev/null 2>&1; then
+                        echo "$user exists"
+                        # Check if user is part of admin group
+                        if id -nG "$user" | grep -qw wheel; then
+                            echo "$user belongs to the admin group"
+                        else
+                            echo "$user does not belong to the admin group"
+                            echo "Adding $user to the admin group"
+                            sudo usermod $user -aG wheel
+                        fi
+                    else
+                        echo "$user does not exist"
+                        echo "Creating $user..."
+                        password=$(aws ssm get-parameters --names $user --with-decryption --query "Parameters[].Value" --region $REGION --output text)
+                        sudo useradd $user -p $password -G wheel > /dev/null 2>&1
+                    fi
+​
+                    if [[ $user == "pamrecon" ]]; then
+                      # check if the /home/$user/.bash_profile exist
+                      if [[ -f /home/$user/.bash_profile ]]; then
+                        if ! grep -q "sudo sudosh" /home/$user/.bash_profile; then
+                          sudo echo "sudo sudosh" >> /home/$user/.bash_profile
+                        fi
+                      else
+                        sudo touch /home/$user/.bash_profile && sudo echo "sudo sudosh" >> /home/$user/.bash_profile
+                      fi
+                    fi
+                  done
+              timeoutSeconds: "{{ executionTimeout }}"
+      DocumentFormat: YAML
+      DocumentType: Command
+      Name: CreateUserSSM
+​
+  ScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "ScheduledRule"
+      ScheduleExpression: !Sub "rate(${scheduleValue} ${scheduleUnit})"
+      State: "ENABLED"
+      Targets:
+        - Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${SSMDocument}"
+          Id: "TargetSSMDocV1"
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          Input: !Sub '{"usernames": ["${usernames}"]}'
+          RunCommandParameters:
+            RunCommandTargets:
+              - Key: !Sub "tag:${tagKey}"
+                Values: !Ref tagValues
+​
+  EventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Event Rule"
+      EventPattern: '{"source": ["aws.ec2"],"detail-type": ["AWS API Call via CloudTrail"],"detail": {"eventSource": ["ec2.amazonaws.com"],"eventName": ["RunInstances"]}}'
+      State: "ENABLED"
+      Targets:
+        - Arn: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${SSMDocument}"
+          Id: "TargetSSMDocV1"
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          Input: !Sub '{"usernames": ["${usernames}"]}'
+          RunCommandParameters:
+            RunCommandTargets:
+              - Key: !Sub "tag:${tagKey}"
+                Values: !Ref tagValues
+​
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ""
+            Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: "sts:AssumeRole"
+      Description: "Role used by AWS EventBridge to run SSM Document."
+​
+  EventBridgeRoleManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - "ssm:StartAutomationExecution"
+            Resource:
+              - "arn:*:ssm:*:*:automation-definition/AWS-RunShellScript*"
+            Effect: Allow
+          - Action:
+              - "iam:PassRole"
+            Resource:
+              - "arn:*:ssm:*:*:role/*"
+            Effect: Allow
+          - Action:
+              - "ssm:*"
+            Resource:
+              - "arn:*:ssm:*:*:*"
+            Effect: Allow
+          - Action:
+              - "ssm:SendCommand"
+            Resource:
+              - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+              - !Sub "arn:aws:ssm:${AWS::Region}:*:document/*"
+            Effect: Allow
+      Roles:
+        - !Ref EventBridgeRole
